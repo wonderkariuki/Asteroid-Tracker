@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <title>Asteroid Tracker</title>
+    <link rel="stylesheet" href="style.css">
+    <script>
+        // Runs before the main script
+        (function () {
+            function report(reason) {
+                const show = () => {
+                    const info = document.getElementById('info');
+                    if (info && info.textContent === 'Loading...') info.textContent = reason;
+                };
+                if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show);
+                else show();
+            }
+
+          
+            let known = null;
+            // Browsers won't load app.js from a page opened straight from the folder
+            if (location.protocol === 'file:') known = 'Open this page through main.py (http://127.0.0.1:8000) or Live Server, not straight from the folder.';
+            else if (!document.createElement('canvas').getContext('webgl2')) known = 'This browser can\'t show 3D graphics (WebGL 2 is off or unsupported). Try updating it, or another browser.';
+            else if (!(HTMLScriptElement.supports && HTMLScriptElement.supports('importmap'))) known = 'This browser is too old for this site. Please update it, or try another browser.';
+
+            window.addEventListener('error', e => {
+                if (e.target && e.target.tagName === 'SCRIPT') report(known || 'Could not download the 3D library. Check your connection or ad blocker, then reload.');
+                else if (e.target === window) report(known || 'Could not start (' + e.message + ').');
+            }, true);
+            window.addEventListener('unhandledrejection', e => report(known || 'Could not start (' + ((e.reason && e.reason.message) || e.reason) + ').'));
+            setTimeout(() => report('Still starting. On a slow connection this can take a while; if it doesn\'t finish, reload the page.'), 30000);
+
+            // The library is part of the site. A page opened straight from the folder can't load local scripts, so it uses the CDN.
+            const fromFolder = location.port === '5500';
+            const base = fromFolder ? 'https://cdn.jsdelivr.net/npm/three@0.160.0/' : './vendor/three/';
+            const map = document.createElement('script');
+            map.type = 'importmap';
+            map.textContent = JSON.stringify({ imports: { three: base + 'build/three.module.js', 'three/addons/': base + 'examples/jsm/' } });
+            document.currentScript.after(map);
+        })();
+    </script>
+</head>
+
+<body>
+    <div id="top-left">
+        <div id="info" class="panel">Loading...</div>
+        <div id="focus-bar" class="panel">
+            <span>View:</span>
+            <button data-focus="sun">Sun</button>
+            <button data-focus="earth">Earth</button>
+            <button data-focus="asteroid" disabled>Asteroid</button>
+            <label><input type="checkbox" id="planet-orbits"> Planet orbits</label>
+            <button id="flybys-btn"><span class="long-label">Upcoming flybys</span><span class="short-label">Flybys</span></button>
+        </div>
+        <div id="filter-bar" class="panel">
+            <span>Show:</span>
+            <label><input type="checkbox" id="hazard-only"> Hazardous only</label>
+            <label>Orbit
+                <select id="class-filter">
+                    <option value="">All</option>
+                    <option>Atira</option>
+                    <option>Aten</option>
+                    <option>Apollo</option>
+                    <option>Amor</option>
+                </select>
+            </label>
+            <label>Size
+                <select id="size-filter">
+                    <option value="0,Infinity">All</option>
+                    <option value="0,0.05">Under 50 m</option>
+                    <option value="0.05,0.14">50–140 m</option>
+                    <option value="0.14,1">140 m–1 km</option>
+                    <option value="1,Infinity">Over 1 km</option>
+                </select>
+            </label>
+        </div>
+        <div id="hint" class="panel">
+            <div>Selected: <b id="selection-name">nothing (click a name)</b><span id="g-hint" hidden> — press G to fly there</span> <button id="fly-btn" disabled>Fly there</button></div>
+            <div id="keys-hint"><kbd>G</kbd> fly to selected · <kbd>+</kbd> <kbd>−</kbd> zoom (<kbd>Shift</kbd> faster) · <kbd>L</kbd> faster · <kbd>J</kbd> slower · <kbd>K</kbd> stop</div>
+        </div>
+        <div id="flybys" class="panel" hidden>
+            <div id="flybys-head">
+                <strong id="flybys-title">Upcoming flybys</strong>
+                <label>Next
+                    <select id="flybys-days">
+                        <option value="7">7 days</option>
+                        <option value="30">30 days</option>
+                        <option value="60" selected>60 days</option>
+                    </select>
+                </label>
+            </div>
+            <small id="flybys-note">Within 0.05 AU (19.5 lunar distances) of Earth · JPL CNEOS</small>
+            <div id="flybys-list"></div>
+        </div>
+    </div>
+    <div id="main-container"></div>
+    <div id="labels"></div>
+
+    <div id="search-panel">
+        <input id="search-box" type="text" placeholder="Search any asteroid (e.g. Apophis, Eros)">
+        <ul id="results" class="panel"></ul>
+        <div id="details" class="panel"></div>
+    </div>
+
+    <div id="inspect" hidden>
+        <div id="inspect-canvas"></div>
+        <div id="inspect-panel" class="panel">
+            <div id="inspect-head"><strong id="inspect-name"></strong><button id="inspect-close">Close</button></div>
+            <div id="inspect-info"></div>
+            <div id="size-compare"></div>
+            <small id="inspect-note">Illustration, not this asteroid's real shape. Generated from its ID, so it always looks the same. Drag to rotate, scroll to zoom. Lit from the Sun's real direction.</small>
+        </div>
+        <div id="inspect-scale" hidden>
+            <div id="inspect-scale-bar"></div>
+            <span id="inspect-scale-label"></span>
+        </div>
+    </div>
+
+    <div id="time-bar" class="panel">
+        <div id="clock">—</div>
+        <div id="time-controls">
+            <button id="play-btn" title="Pause / play">❚❚</button>
+            <button id="now-btn" title="Jump to the current time, real-time speed">Now</button>
+            <input id="rate-slider" type="range" min="-10" max="10" step="1" value="1">
+            <span id="rate-label">1 sec / sec</span>
+        </div>
+        <div id="rate-ticks"><span>◀ rewind</span><span>paused</span><span>fast-forward ▶</span></div>
+        <div id="jump-row">
+            Go to (UTC): <input id="jump-input" type="datetime-local" step="1"> <button id="jump-btn">Go</button>
+        </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
